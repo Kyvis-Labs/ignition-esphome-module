@@ -241,6 +241,7 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
             case "number" -> logger.info(new Number(payload).toString());
             case "Button" -> logger.info(new Button(payload).toString());
             case "switch" -> logger.info(new Switch(payload).toString());
+            case "light" -> logger.info(new Light(payload).toString());
         }
 
         var name = String.valueOf(payload.get("name"));
