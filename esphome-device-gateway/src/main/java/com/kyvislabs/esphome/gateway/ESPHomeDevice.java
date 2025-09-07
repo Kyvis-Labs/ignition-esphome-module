@@ -142,6 +142,11 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
                     handlePingEvent(data);
                     return;
                 }
+
+                if (type.equals("log")) {
+                    handleLogEvent(data);
+                    return;
+                }
             }
 
             @Override
@@ -175,6 +180,9 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
         client.dispatcher().executorService().shutdown();
     }
 
+    private void handleLogEvent(String json) {
+        logger.info(json);
+    }
     private void handlePingEvent(String json) {
 
         var payload = gson.fromJson(json, HashMap.class);
