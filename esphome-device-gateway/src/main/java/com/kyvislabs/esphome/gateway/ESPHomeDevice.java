@@ -51,6 +51,7 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
     Gson gson = new GsonBuilder().create();
     UaFolderNode stateFolder;
     UaFolderNode metaFolder;
+    UaFolderNode diagnosticsFolder;
 
     public ESPHomeDevice(DeviceContext context, ESPHomeDeviceConfig config) {
         super(context.getServer());
@@ -111,7 +112,17 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
         );
         getNodeManager().addNode(metaFolder);
         rootNode.addOrganizes(metaFolder);
+        
+        diagnosticsFolder = new UaFolderNode(
+                getNodeContext(),
+                context.nodeId("[Dianostics]"),
+                context.qualifiedName("[Diagnostics]"),
+                new LocalizedText("[Diagnostics]")
+        );
+        getNodeManager().addNode(diagnosticsFolder);
+        rootNode.addOrganizes(diagnosticsFolder);
 
+        addDiagnosticTags();
         // fire initial subscription creation
         onDataItemsCreated(
                 context.getSubscriptionModel()
@@ -127,6 +138,10 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
             public void onOpen(EventSource eventSource, Response response) {
                 logger.info("SSE connection opened");
                 connectionStatus = "Connected";
+                nodeList.get("diagnostics-connected").setValue(new DataValue(new Variant(true)));
+                nodeList.get("diagnostics-status").setValue(new DataValue(new Variant("Connected")));
+                nodeList.get("diagnostics-state").setValue(new DataValue(new Variant("Connected")));
+
             }
 
             @Override
@@ -153,12 +168,20 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
             public void onClosed(EventSource eventSource) {
                 logger.info("SSE connection closed");
                 connectionStatus = "Closed";
+                nodeList.get("diagnostics-connected").setValue(new DataValue(new Variant(false)));
+                nodeList.get("diagnostics-status").setValue(new DataValue(new Variant("Disconnected")));
+                nodeList.get("diagnostics-state").setValue(new DataValue(new Variant("Disconnected")));
+
             }
 
             @Override
             public void onFailure(EventSource eventSource, Throwable t, Response response) {
                 logger.error("SSE connection failed", t);
                 connectionStatus = "Connection Failure";
+                nodeList.get("diagnostics-connected").setValue(new DataValue(new Variant(false)));
+                nodeList.get("diagnostics-status").setValue(new DataValue(new Variant("Connection Failure")));
+                nodeList.get("diagnostics-state").setValue(new DataValue(new Variant("Connection Failure")));
+
                 eventSource.cancel();
                 Time.sleep(5.0);
                 factory.newEventSource(request, this);
@@ -180,6 +203,69 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
         client.dispatcher().executorService().shutdown();
     }
 
+
+    private void addDiagnosticTags() {
+
+        var node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-connected"))
+                        .setBrowseName(context.qualifiedName("Connected"))
+                        .setDisplayName(new LocalizedText("Connected"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Boolean.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant("Connected".equals(connectionStatus))))
+                        .build()
+            );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-connected", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-state"))
+                        .setBrowseName(context.qualifiedName("State"))
+                        .setDisplayName(new LocalizedText("State"))
+                        .setDataType(OpcUaDataType.fromBackingClass(String.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(connectionStatus)))
+                        .build()
+            );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-state", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+            b.setNodeId(context.nodeId("diagnostics-status"))
+                    .setBrowseName(context.qualifiedName("Status"))
+                    .setDisplayName(new LocalizedText("Status"))
+                    .setDataType(OpcUaDataType.fromBackingClass(String.class).getNodeId())
+                    .setTypeDefinition(NodeIds.BaseDataVariableType)
+                    .setAccessLevel(AccessLevel.READ_ONLY)
+                    .setUserAccessLevel(AccessLevel.READ_ONLY)
+                    .setValue(new DataValue(new Variant(connectionStatus)))
+                    .build()
+         );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-status", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+            b.setNodeId(context.nodeId("diagnostics-url"))
+                    .setBrowseName(context.qualifiedName("URL"))
+                    .setDisplayName(new LocalizedText("URL"))
+                    .setDataType(OpcUaDataType.fromBackingClass(String.class).getNodeId())
+                    .setTypeDefinition(NodeIds.BaseDataVariableType)
+                    .setAccessLevel(AccessLevel.READ_ONLY)
+                    .setUserAccessLevel(AccessLevel.READ_ONLY)
+                    .setValue(new DataValue(new Variant(config.general().deviceUrl())))
+                    .build()
+         );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-url", node);
+    }
     private void handleLogEvent(String json) {
         logger.info(json);
     }
