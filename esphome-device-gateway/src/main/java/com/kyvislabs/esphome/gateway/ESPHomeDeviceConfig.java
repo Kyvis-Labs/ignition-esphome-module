@@ -16,6 +16,6 @@ public record ESPHomeDeviceConfig(General general) {
           @FormField(FormFieldType.TEXT)
           @DefaultValue("http://ipaddress/events")
           @Required
-          @Description("IP Address of the device")
+          @Description("The URL of the device to connect to.")
           String deviceUrl) {}
 }

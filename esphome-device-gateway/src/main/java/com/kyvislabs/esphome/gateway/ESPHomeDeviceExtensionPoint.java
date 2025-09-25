@@ -13,13 +13,13 @@ import java.util.Set;
 
 public class ESPHomeDeviceExtensionPoint extends DeviceExtensionPoint<ESPHomeDeviceConfig> {
 
-  public static final String TYPE_ID = "ia.io.ExampleDevice";
+  public static final String TYPE_ID = "org.kyvislabs.esphome";
 
   public ESPHomeDeviceExtensionPoint() {
     super(
         TYPE_ID,
-        "ExampleDevice.Meta.DisplayName",
-        "ExampleDevice.Meta.Description",
+        "ESPHomeDevice.Meta.DisplayName",
+        "ESPHomeDevice.Meta.Description",
         ESPHomeDeviceConfig.class);
   }
 
