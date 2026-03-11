@@ -3,6 +3,7 @@ package com.kyvislabs.esphome.gateway.types;
 import com.inductiveautomation.ignition.common.TypeUtilities;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 
 public class Base {
     String id;
@@ -16,5 +17,11 @@ public class Base {
         name = TypeUtilities.toString(payload.getOrDefault("name",null));
         icon = TypeUtilities.toString(payload.getOrDefault("icon",null));
         entityCategory = TypeUtilities.toInteger(payload.getOrDefault("entity_category",null));
+    }
+
+    public LinkedHashMap<String, Object> getProperties() {
+        var props = new LinkedHashMap<String, Object>();
+        props.put("icon", icon != null ? icon : "");
+        return props;
     }
 }

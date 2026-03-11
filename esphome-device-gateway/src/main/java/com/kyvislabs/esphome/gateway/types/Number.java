@@ -3,6 +3,7 @@ package com.kyvislabs.esphome.gateway.types;
 import com.inductiveautomation.ignition.common.TypeUtilities;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 
 public class Number extends Base{
     String state;
@@ -23,6 +24,23 @@ public class Number extends Base{
         maxValue = TypeUtilities.toDouble(payload.getOrDefault("max_value",null));
         step = TypeUtilities.toDouble(payload.getOrDefault("step",null));
         mode = TypeUtilities.toInteger(payload.getOrDefault("mode",null));
+    }
+
+    public Double getValue() {
+        return value != null ? value : 0.0;
+    }
+
+    @Override
+    public LinkedHashMap<String, Object> getProperties() {
+        var props = super.getProperties();
+        props.put("value", value != null ? value : 0.0);
+        props.put("state", state != null ? state : "");
+        props.put("uom", units != null ? units : "");
+        props.put("min_value", minValue != null ? minValue : 0.0);
+        props.put("max_value", maxValue != null ? maxValue : 0.0);
+        props.put("step", step != null ? step : 0.0);
+        props.put("mode", mode != null ? mode : 0);
+        return props;
     }
 
     @Override

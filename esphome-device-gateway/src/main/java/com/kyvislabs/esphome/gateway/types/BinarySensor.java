@@ -3,6 +3,7 @@ package com.kyvislabs.esphome.gateway.types;
 import com.inductiveautomation.ignition.common.TypeUtilities;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 
 public class BinarySensor extends Base{
     String state;
@@ -12,6 +13,18 @@ public class BinarySensor extends Base{
         super(payload);
         state = TypeUtilities.toString(payload.getOrDefault("state",null));
         value = TypeUtilities.toBool(payload.getOrDefault("value", null));
+    }
+
+    public Boolean getValue() {
+        return value;
+    }
+
+    @Override
+    public LinkedHashMap<String, Object> getProperties() {
+        var props = super.getProperties();
+        props.put("value", value != null ? value : false);
+        props.put("state", state != null ? state : "");
+        return props;
     }
 
     @Override

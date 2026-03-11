@@ -6,7 +6,9 @@ import com.inductiveautomation.ignition.gateway.opcua.server.api.Device;
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
 
 import java.util.List;
-import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -29,11 +31,12 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
-import org.python.modules.time.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.kyvislabs.esphome.gateway.types.*;
 import com.kyvislabs.esphome.gateway.types.Number;
+
+import java.util.HashMap;
 
 public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements Device {
 
@@ -46,8 +49,11 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
     OkHttpClient client;
     EventSource.Factory factory;
     String connectionStatus = "Not Connected";
+    int connectionCount = 0;
     EventSource eventSource;
-    HashMap<String, UaVariableNode> nodeList = new HashMap<String, UaVariableNode>();
+    ConcurrentHashMap<String, UaVariableNode> nodeList = new ConcurrentHashMap<>();
+    ConcurrentHashMap<String, UaFolderNode> domainFolders = new ConcurrentHashMap<>();
+    Set<String> entityFolders = ConcurrentHashMap.newKeySet();
     Gson gson = new GsonBuilder().create();
     UaFolderNode stateFolder;
     UaFolderNode metaFolder;
@@ -112,10 +118,10 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
         );
         getNodeManager().addNode(metaFolder);
         rootNode.addOrganizes(metaFolder);
-        
+
         diagnosticsFolder = new UaFolderNode(
                 getNodeContext(),
-                context.nodeId("[Dianostics]"),
+                context.nodeId("[Diagnostics]"),
                 context.qualifiedName("[Diagnostics]"),
                 new LocalizedText("[Diagnostics]")
         );
@@ -138,9 +144,11 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
             public void onOpen(EventSource eventSource, Response response) {
                 logger.info("SSE connection opened");
                 connectionStatus = "Connected";
+                connectionCount++;
                 nodeList.get("diagnostics-connected").setValue(new DataValue(new Variant(true)));
                 nodeList.get("diagnostics-status").setValue(new DataValue(new Variant("Connected")));
                 nodeList.get("diagnostics-state").setValue(new DataValue(new Variant("Connected")));
+                nodeList.get("diagnostics-connection-count").setValue(new DataValue(new Variant(connectionCount)));
 
             }
 
@@ -183,7 +191,12 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
                 nodeList.get("diagnostics-state").setValue(new DataValue(new Variant("Connection Failure")));
 
                 eventSource.cancel();
-                Time.sleep(5.0);
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
                 factory.newEventSource(request, this);
             }
         };
@@ -265,33 +278,59 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
         getNodeManager().addNode(node);
         diagnosticsFolder.addOrganizes(node);
         nodeList.put("diagnostics-url", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+            b.setNodeId(context.nodeId("diagnostics-connection-count"))
+                    .setBrowseName(context.qualifiedName("Connection Count"))
+                    .setDisplayName(new LocalizedText("Connection Count"))
+                    .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
+                    .setTypeDefinition(NodeIds.BaseDataVariableType)
+                    .setAccessLevel(AccessLevel.READ_ONLY)
+                    .setUserAccessLevel(AccessLevel.READ_ONLY)
+                    .setValue(new DataValue(new Variant(connectionCount)))
+                    .build()
+         );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-connection-count", node);
     }
+
     private void handleLogEvent(String json) {
         logger.info(json);
     }
+
     private void handlePingEvent(String json) {
 
         var payload = gson.fromJson(json, HashMap.class);
 
+        if (payload == null) {
+            logger.debug("Ping event had no parseable data");
+            return;
+        }
+
         for (Object key: payload.keySet()){
             var name = String.valueOf(key);
             var value = payload.get(key);
+            if (value == null) {
+                value = "";
+            }
             var id = String.format("%s.%s","meta",name);
             if (nodeList.containsKey(id)) {
                 var node = nodeList.get(id);
                 node.setValue(new DataValue(new Variant(value)));
-                return;
+                continue;
             }
 
+            final Object finalValue = value;
             var node = UaVariableNode.build(getNodeContext(), b ->
                     b.setNodeId(context.nodeId(id))
                             .setBrowseName(context.qualifiedName(name))
                             .setDisplayName(new LocalizedText(name))
-                            .setDataType(OpcUaDataType.fromBackingClass(value.getClass()).getNodeId())
+                            .setDataType(OpcUaDataType.fromBackingClass(finalValue.getClass()).getNodeId())
                             .setTypeDefinition(NodeIds.BaseDataVariableType)
                             .setAccessLevel(AccessLevel.READ_ONLY)
                             .setUserAccessLevel(AccessLevel.READ_ONLY)
-                            .setValue(new DataValue(new Variant(value)))
+                            .setValue(new DataValue(new Variant(finalValue)))
                             .build()
             );
 
@@ -302,9 +341,64 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
 
     }
 
+    private UaFolderNode getOrCreateDomainFolder(String domain) {
+        return domainFolders.computeIfAbsent(domain, d -> {
+            var folder = new UaFolderNode(
+                    getNodeContext(),
+                    context.nodeId("state-" + d),
+                    context.qualifiedName(d),
+                    new LocalizedText(d)
+            );
+            getNodeManager().addNode(folder);
+            stateFolder.addOrganizes(folder);
+            return folder;
+        });
+    }
+
+    private Base createEntity(String domain, HashMap<String, Object> payload) {
+        var entity = switch (domain) {
+            case "binary_sensor" -> new BinarySensor(payload);
+            case "text_sensor" -> new TextSensor(payload);
+            case "sensor" -> new Sensor(payload);
+            case "number" -> new Number(payload);
+            case "switch" -> new Switch(payload);
+            case "light" -> new Light(payload);
+            case "button" -> new Button(payload);
+            default -> {
+                logger.warn("Unknown domain: {}", domain);
+                yield new Base(payload);
+            }
+        };
+
+        return entity;
+    }
+
+    private void createPropertyNode(String entityId, String propName, Object propValue, UaFolderNode parentFolder) {
+        var nodeKey = entityId + "." + propName;
+        var node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId(nodeKey))
+                        .setBrowseName(context.qualifiedName(propName))
+                        .setDisplayName(new LocalizedText(propName))
+                        .setDataType(OpcUaDataType.fromBackingClass(propValue.getClass()).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(propValue)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        parentFolder.addOrganizes(node);
+        nodeList.put(nodeKey, node);
+    }
+
     private void handleStateEvent(String json) {
 
         var payload = gson.fromJson(json, HashMap.class);
+
+        if (payload == null) {
+            logger.debug("State event had no parseable data");
+            return;
+        }
 
         if (!payload.containsKey("id")) {
             logger.debug("No id defined in payload");
@@ -312,52 +406,52 @@ public class ESPHomeDevice extends ManagedAddressSpaceWithLifecycle implements D
         }
 
         var id = String.valueOf(payload.get("id"));
+        var domain = payload.containsKey("domain") ? String.valueOf(payload.get("domain")) : id.split("-")[0];
 
-        if (nodeList.containsKey(id)) {
-            var node = nodeList.get(id);
-            if (payload.containsKey("value")) {
-                node.setValue(new DataValue(new Variant(payload.get("value"))));
+        try {
+            // Update existing entity properties
+            if (entityFolders.contains(id)) {
+                var entity = createEntity(domain, payload);
+                for (Map.Entry<String, Object> entry : entity.getProperties().entrySet()) {
+                    var nodeKey = id + "." + entry.getKey();
+                    var node = nodeList.get(nodeKey);
+                    if (node != null) {
+                        node.setValue(new DataValue(new Variant(entry.getValue())));
+                    }
+                }
+                return;
             }
-            return;
+
+            if (!payload.containsKey("name")) {
+                logger.warn("No name defined in payload");
+                return;
+            }
+
+            var name = String.valueOf(payload.get("name"));
+            var entity = createEntity(domain, payload);
+            var properties = entity.getProperties();
+
+            // Create domain folder if needed
+            var domainFolder = getOrCreateDomainFolder(domain);
+
+            // Create entity folder
+            var entityFolder = new UaFolderNode(
+                    getNodeContext(),
+                    context.nodeId(id),
+                    context.qualifiedName(name),
+                    new LocalizedText(name)
+            );
+            getNodeManager().addNode(entityFolder);
+            domainFolder.addOrganizes(entityFolder);
+            entityFolders.add(id);
+
+            // Create a child node for each property
+            for (Map.Entry<String, Object> entry : properties.entrySet()) {
+                createPropertyNode(id, entry.getKey(), entry.getValue(), entityFolder);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to process state event for entity: {}", id, e);
         }
-
-        var type = id.split("-")[0];
-
-        if (!payload.containsKey("name")) {
-            logger.warn("No name defined in payload");
-            return;
-        }
-
-        switch (type) {
-            case "binary_sensor" -> logger.info(new BinarySensor(payload).toString());
-            case "text_sensor" -> logger.info(new TextSensor(payload).toString());
-            case "sensor" -> logger.info(new Sensor(payload).toString());
-            case "number" -> logger.info(new Number(payload).toString());
-            case "Button" -> logger.info(new Button(payload).toString());
-            case "switch" -> logger.info(new Switch(payload).toString());
-            case "light" -> logger.info(new Light(payload).toString());
-        }
-
-        var name = String.valueOf(payload.get("name"));
-
-        var value = payload.getOrDefault("value",false);
-
-        var node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId(id))
-                        .setBrowseName(context.qualifiedName(name))
-                        .setDisplayName(new LocalizedText(name))
-                        .setDataType(OpcUaDataType.fromBackingClass(value.getClass()).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(value)))
-                        .build()
-        );
-
-        getNodeManager().addNode(node);
-        stateFolder.addOrganizes(node);
-        nodeList.put(id, node);
-
     }
 
     @Override
