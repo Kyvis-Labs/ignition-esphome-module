@@ -6,6 +6,8 @@ import com.inductiveautomation.ignition.gateway.config.migration.IdbMigrationStr
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
 import com.inductiveautomation.ignition.gateway.opcua.server.api.AbstractDeviceModuleHook;
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceExtensionPoint;
+import com.kyvislabs.esphome.gateway.nativeapi.NativeApiDevice;
+import com.kyvislabs.esphome.gateway.nativeapi.NativeApiDeviceExtensionPoint;
 
 import java.util.List;
 
@@ -16,6 +18,7 @@ public class ModuleHook extends AbstractDeviceModuleHook {
     super.setup(context);
 
     BundleUtil.get().addBundle(ESPHomeDevice.class);
+    BundleUtil.get().addBundle(NativeApiDevice.class);
   }
 
   @Override
@@ -28,11 +31,12 @@ public class ModuleHook extends AbstractDeviceModuleHook {
     super.shutdown();
 
     BundleUtil.get().removeBundle(ESPHomeDevice.class);
+    BundleUtil.get().removeBundle(NativeApiDevice.class);
   }
 
   @Override
   protected List<DeviceExtensionPoint<?>> getDeviceExtensionPoints() {
-    return List.of(new ESPHomeDeviceExtensionPoint());
+    return List.of(new ESPHomeDeviceExtensionPoint(), new NativeApiDeviceExtensionPoint());
   }
 
   @Override
