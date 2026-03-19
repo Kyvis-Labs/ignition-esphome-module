@@ -467,16 +467,16 @@ public class EntityMessageParser {
                 m.put("state", val ? "ON" : "OFF");
             }
             case 3 -> m.put("brightness", (double) r.readFloat());
-            case 4 -> m.put("color_mode", r.readInt32());
-            case 5 -> m.put("color_brightness", (double) r.readFloat());
-            case 6 -> m.put("color_r", (double) r.readFloat());
-            case 7 -> m.put("color_g", (double) r.readFloat());
-            case 8 -> m.put("color_b", (double) r.readFloat());
-            case 9 -> m.put("white", (double) r.readFloat());
-            case 10 -> m.put("color_temperature", (double) r.readFloat());
-            case 11 -> m.put("cold_white", (double) r.readFloat());
-            case 12 -> m.put("warm_white", (double) r.readFloat());
-            case 13 -> m.put("effect", r.readString());
+            case 4 -> m.put("color_r", (double) r.readFloat());
+            case 5 -> m.put("color_g", (double) r.readFloat());
+            case 6 -> m.put("color_b", (double) r.readFloat());
+            case 7 -> m.put("white", (double) r.readFloat());
+            case 8 -> m.put("color_temperature", (double) r.readFloat());
+            case 9 -> m.put("effect", r.readString());
+            case 10 -> m.put("color_brightness", (double) r.readFloat());
+            case 11 -> m.put("color_mode", lightColorMode(r.readEnum()));
+            case 12 -> m.put("cold_white", (double) r.readFloat());
+            case 13 -> m.put("warm_white", (double) r.readFloat());
             default -> r.skipField(wireType);
         }
     }
@@ -645,6 +645,22 @@ public class EntityMessageParser {
             case 5 -> "ECO";
             case 6 -> "SLEEP";
             case 7 -> "ACTIVITY";
+            default -> "UNKNOWN";
+        };
+    }
+
+    private static String lightColorMode(int value) {
+        return switch (value) {
+            case 0 -> "UNKNOWN";
+            case 1 -> "ON_OFF";
+            case 2 -> "BRIGHTNESS";
+            case 7 -> "WHITE";
+            case 11 -> "COLOR_TEMPERATURE";
+            case 19 -> "COLD_WARM_WHITE";
+            case 35 -> "RGB";
+            case 39 -> "RGB_WHITE";
+            case 47 -> "RGB_COLOR_TEMPERATURE";
+            case 51 -> "RGB_COLD_WARM_WHITE";
             default -> "UNKNOWN";
         };
     }

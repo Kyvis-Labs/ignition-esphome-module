@@ -109,16 +109,23 @@ public class ProtobufReader {
     public void skipField(int wireType) {
         switch (wireType) {
             case 0 -> readVarInt();
-            case 1 -> {
-                pos += 8;
-            }
+            case 1 -> pos += 8;
             case 2 -> {
                 int length = (int) readVarInt();
                 pos += length;
             }
-            case 5 -> {
-                pos += 4;
+            case 3 -> {
+                // Start group (deprecated) — skip fields until matching end group
+                while (hasRemaining()) {
+                    int tag = readTag();
+                    if (getWireType(tag) == 4) {
+                        break;
+                    }
+                    skipField(getWireType(tag));
+                }
             }
+            case 4 -> { /* End group — handled by case 3 */ }
+            case 5 -> pos += 4;
             default -> throw new IllegalStateException("Unknown wire type: " + wireType);
         }
     }

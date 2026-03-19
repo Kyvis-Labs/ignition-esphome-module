@@ -12,9 +12,7 @@ public class Light extends Base{
     String effect;
     String colorMode;
     Double brightness;
-    Double colorR;
-    Double colorG;
-    Double colorB;
+    String color;
     String effects;
 
     @SuppressWarnings("unchecked")
@@ -25,12 +23,19 @@ public class Light extends Base{
         colorMode = TypeUtilities.toString(payload.getOrDefault("color_mode",null));
         brightness = TypeUtilities.toDouble(payload.getOrDefault("brightness",null));
 
+        double r = 0, g = 0, b = 0;
         if (payload.containsKey("color") && payload.get("color") instanceof Map) {
             Map<String, Object> colorMap = (Map<String, Object>) payload.get("color");
-            colorR = TypeUtilities.toDouble(colorMap.getOrDefault("r", null));
-            colorG = TypeUtilities.toDouble(colorMap.getOrDefault("g", null));
-            colorB = TypeUtilities.toDouble(colorMap.getOrDefault("b", null));
+            r = TypeUtilities.toDouble(colorMap.getOrDefault("r", 0.0));
+            g = TypeUtilities.toDouble(colorMap.getOrDefault("g", 0.0));
+            b = TypeUtilities.toDouble(colorMap.getOrDefault("b", 0.0));
+        } else {
+            r = TypeUtilities.toDouble(payload.getOrDefault("color_r", 0.0));
+            g = TypeUtilities.toDouble(payload.getOrDefault("color_g", 0.0));
+            b = TypeUtilities.toDouble(payload.getOrDefault("color_b", 0.0));
         }
+        color = String.format("#%02X%02X%02X",
+                (int) Math.round(r * 255), (int) Math.round(g * 255), (int) Math.round(b * 255));
 
         if (payload.containsKey("effects") && payload.get("effects") instanceof List) {
             List<Object> effectsList = (List<Object>) payload.get("effects");
@@ -49,9 +54,7 @@ public class Light extends Base{
         props.put("effect", effect != null ? effect : "");
         props.put("color_mode", colorMode != null ? colorMode : "");
         props.put("brightness", brightness != null ? brightness : 0.0);
-        props.put("color_r", colorR != null ? colorR : 0.0);
-        props.put("color_g", colorG != null ? colorG : 0.0);
-        props.put("color_b", colorB != null ? colorB : 0.0);
+        props.put("color", color != null ? color : "#000000");
         props.put("effects", effects != null ? effects : "");
         return props;
     }
@@ -63,9 +66,7 @@ public class Light extends Base{
                 ", effect='" + effect + '\'' +
                 ", colorMode='" + colorMode + '\'' +
                 ", brightness=" + brightness +
-                ", colorR=" + colorR +
-                ", colorG=" + colorG +
-                ", colorB=" + colorB +
+                ", color='" + color + '\'' +
                 ", effects='" + effects + '\'' +
                 ", id='" + id + '\'' +
                 ", name='" + name + '\'' +

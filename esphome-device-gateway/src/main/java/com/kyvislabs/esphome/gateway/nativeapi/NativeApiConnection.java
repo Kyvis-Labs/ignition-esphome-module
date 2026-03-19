@@ -331,6 +331,125 @@ public class NativeApiConnection {
         }
     }
 
+    public void sendSwitchCommand(int key, boolean state) throws IOException {
+        var writer = new ProtobufWriter();
+        writer.writeFixed32Field(1, key);
+        writer.writeBoolField(2, state);
+        sendMessage(MessageTypes.SWITCH_COMMAND_REQUEST, writer.toByteArray());
+    }
+
+    public void sendButtonCommand(int key) throws IOException {
+        var writer = new ProtobufWriter();
+        writer.writeFixed32Field(1, key);
+        sendMessage(MessageTypes.BUTTON_COMMAND_REQUEST, writer.toByteArray());
+    }
+
+    public void sendNumberCommand(int key, float state) throws IOException {
+        var writer = new ProtobufWriter();
+        writer.writeFixed32Field(1, key);
+        writer.writeFloatField(2, state);
+        sendMessage(MessageTypes.NUMBER_COMMAND_REQUEST, writer.toByteArray());
+    }
+
+    public void sendCoverCommand(int key, Float position, Float tilt, boolean stop) throws IOException {
+        var writer = new ProtobufWriter();
+        writer.writeFixed32Field(1, key);
+        if (position != null) {
+            writer.writeBoolField(4, true);  // has_position
+            writer.writeFloatField(5, position);
+        }
+        if (tilt != null) {
+            writer.writeBoolField(6, true);  // has_tilt
+            writer.writeFloatField(7, tilt);
+        }
+        if (stop) {
+            writer.writeBoolField(8, true);
+        }
+        sendMessage(MessageTypes.COVER_COMMAND_REQUEST, writer.toByteArray());
+    }
+
+    public void sendFanCommand(int key, Boolean state, Integer speedLevel, Boolean oscillating, Integer direction) throws IOException {
+        var writer = new ProtobufWriter();
+        writer.writeFixed32Field(1, key);
+        if (state != null) {
+            writer.writeBoolField(2, true);  // has_state
+            writer.writeBoolField(3, state);
+        }
+        if (oscillating != null) {
+            writer.writeBoolField(6, true);  // has_oscillating
+            writer.writeBoolField(7, oscillating);
+        }
+        if (direction != null) {
+            writer.writeBoolField(8, true);  // has_direction
+            writer.writeVarIntField(9, direction);
+        }
+        if (speedLevel != null) {
+            writer.writeBoolField(10, true);  // has_speed_level
+            writer.writeVarIntField(11, speedLevel);
+        }
+        sendMessage(MessageTypes.FAN_COMMAND_REQUEST, writer.toByteArray());
+    }
+
+    public void sendLightCommand(int key, Boolean state, Float brightness, Float red, Float green, Float blue, String effect) throws IOException {
+        var writer = new ProtobufWriter();
+        writer.writeFixed32Field(1, key);
+        if (state != null) {
+            writer.writeBoolField(2, true);  // has_state
+            writer.writeBoolField(3, state);
+        }
+        if (brightness != null) {
+            writer.writeBoolField(4, true);  // has_brightness
+            writer.writeFloatField(5, brightness);
+        }
+        if (red != null) {
+            writer.writeBoolField(6, true);  // has_rgb
+            writer.writeFloatField(7, red);
+            writer.writeFloatField(8, green != null ? green : 0f);
+            writer.writeFloatField(9, blue != null ? blue : 0f);
+        }
+        if (effect != null) {
+            writer.writeBoolField(18, true);  // has_effect
+            writer.writeStringField(19, effect);
+        }
+        sendMessage(MessageTypes.LIGHT_COMMAND_REQUEST, writer.toByteArray());
+    }
+
+    public void sendSelectCommand(int key, String state) throws IOException {
+        var writer = new ProtobufWriter();
+        writer.writeFixed32Field(1, key);
+        writer.writeStringField(2, state);
+        sendMessage(MessageTypes.SELECT_COMMAND_REQUEST, writer.toByteArray());
+    }
+
+    public void sendClimateCommand(int key, Integer mode, Float targetTemp, Integer fanMode, Integer swingMode) throws IOException {
+        var writer = new ProtobufWriter();
+        writer.writeFixed32Field(1, key);
+        if (mode != null) {
+            writer.writeBoolField(2, true);  // has_mode
+            writer.writeVarIntField(3, mode);
+        }
+        if (targetTemp != null) {
+            writer.writeBoolField(4, true);  // has_target_temperature
+            writer.writeFloatField(5, targetTemp);
+        }
+        if (fanMode != null) {
+            writer.writeBoolField(12, true);  // has_fan_mode
+            writer.writeVarIntField(13, fanMode);
+        }
+        if (swingMode != null) {
+            writer.writeBoolField(14, true);  // has_swing_mode
+            writer.writeVarIntField(15, swingMode);
+        }
+        sendMessage(MessageTypes.CLIMATE_COMMAND_REQUEST, writer.toByteArray());
+    }
+
+    public void sendLockCommand(int key, int command) throws IOException {
+        var writer = new ProtobufWriter();
+        writer.writeFixed32Field(1, key);
+        writer.writeVarIntField(2, command);
+        sendMessage(MessageTypes.LOCK_COMMAND_REQUEST, writer.toByteArray());
+    }
+
     private void sendPing() {
         try {
             sendMessage(MessageTypes.PING_REQUEST, new byte[0]);

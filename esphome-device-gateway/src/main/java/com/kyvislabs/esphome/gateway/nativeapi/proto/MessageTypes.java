@@ -37,16 +37,27 @@ public final class MessageTypes {
     public static final int SWITCH_STATE_RESPONSE = 26;
     public static final int TEXT_SENSOR_STATE_RESPONSE = 27;
 
+    // Commands
+    public static final int COVER_COMMAND_REQUEST = 30;
+    public static final int FAN_COMMAND_REQUEST = 31;
+    public static final int LIGHT_COMMAND_REQUEST = 32;
+    public static final int SWITCH_COMMAND_REQUEST = 33;
+
     // Additional entity types
-    public static final int LIST_ENTITIES_NUMBER_RESPONSE = 49;
-    public static final int NUMBER_STATE_RESPONSE = 50;
-    public static final int LIST_ENTITIES_SELECT_RESPONSE = 51;
-    public static final int SELECT_STATE_RESPONSE = 52;
-    public static final int LIST_ENTITIES_LOCK_RESPONSE = 58;
-    public static final int LOCK_STATE_RESPONSE = 59;
-    public static final int LIST_ENTITIES_BUTTON_RESPONSE = 61;
     public static final int LIST_ENTITIES_CLIMATE_RESPONSE = 46;
     public static final int CLIMATE_STATE_RESPONSE = 47;
+    public static final int CLIMATE_COMMAND_REQUEST = 48;
+    public static final int LIST_ENTITIES_NUMBER_RESPONSE = 49;
+    public static final int NUMBER_STATE_RESPONSE = 50;
+    public static final int NUMBER_COMMAND_REQUEST = 51;
+    public static final int LIST_ENTITIES_SELECT_RESPONSE = 52;
+    public static final int SELECT_STATE_RESPONSE = 53;
+    public static final int SELECT_COMMAND_REQUEST = 54;
+    public static final int LIST_ENTITIES_LOCK_RESPONSE = 58;
+    public static final int LOCK_STATE_RESPONSE = 59;
+    public static final int LOCK_COMMAND_REQUEST = 60;
+    public static final int LIST_ENTITIES_BUTTON_RESPONSE = 61;
+    public static final int BUTTON_COMMAND_REQUEST = 62;
 
     public static String domainForListEntities(int messageType) {
         return switch (messageType) {
@@ -77,8 +88,8 @@ public final class MessageTypes {
             case TEXT_SENSOR_STATE_RESPONSE -> "text_sensor";
             case NUMBER_STATE_RESPONSE -> "number";
             case SELECT_STATE_RESPONSE -> "select";
-            case LOCK_STATE_RESPONSE -> "lock";
             case CLIMATE_STATE_RESPONSE -> "climate";
+            case LOCK_STATE_RESPONSE -> "lock";
             default -> null;
         };
     }
