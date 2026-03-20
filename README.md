@@ -79,6 +79,12 @@ All entity types are read-only when using the SSE device driver. The Native API 
     URL              (String)     — SSE only
     Host             (String)     — Native API only
     Connection Count (Integer)
+    Received Messages (Long)    — Native API only
+    Last Message Size (Integer) — Native API only
+    Sent Messages     (Long)    — Native API only
+    Received Bytes    (Long)    — Native API only
+    Sent Bytes        (Long)    — Native API only
+    Reset Counters    (Boolean, writable) — Native API only
 ```
 
 ## Configuration

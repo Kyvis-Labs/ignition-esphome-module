@@ -42,6 +42,9 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
     private NativeApiConnection connection;
     String connectionStatus = "Not Connected";
     int connectionCount = 0;
+    int disconnectCount = 0;
+    int errorCount = 0;
+    String lastError = "";
 
     ConcurrentHashMap<String, UaVariableNode> nodeList = new ConcurrentHashMap<>();
     ConcurrentHashMap<String, UaFolderNode> domainFolders = new ConcurrentHashMap<>();
@@ -220,6 +223,156 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
         getNodeManager().addNode(node);
         diagnosticsFolder.addOrganizes(node);
         nodeList.put("diagnostics-connection-count", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-received-messages"))
+                        .setBrowseName(context.qualifiedName("Received Messages"))
+                        .setDisplayName(new LocalizedText("Received Messages"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Long.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(0L)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-received-messages", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-last-message-size"))
+                        .setBrowseName(context.qualifiedName("Last Message Size"))
+                        .setDisplayName(new LocalizedText("Last Message Size"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(0)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-last-message-size", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-sent-messages"))
+                        .setBrowseName(context.qualifiedName("Sent Messages"))
+                        .setDisplayName(new LocalizedText("Sent Messages"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Long.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(0L)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-sent-messages", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-received-bytes"))
+                        .setBrowseName(context.qualifiedName("Received Bytes"))
+                        .setDisplayName(new LocalizedText("Received Bytes"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Long.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(0L)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-received-bytes", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-sent-bytes"))
+                        .setBrowseName(context.qualifiedName("Sent Bytes"))
+                        .setDisplayName(new LocalizedText("Sent Bytes"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Long.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(0L)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-sent-bytes", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-reset-counters"))
+                        .setBrowseName(context.qualifiedName("Reset Counters"))
+                        .setDisplayName(new LocalizedText("Reset Counters"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Boolean.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_WRITE)
+                        .setUserAccessLevel(AccessLevel.READ_WRITE)
+                        .setValue(new DataValue(new Variant(false)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-reset-counters", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-entity-count"))
+                        .setBrowseName(context.qualifiedName("Entity Count"))
+                        .setDisplayName(new LocalizedText("Entity Count"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(0)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-entity-count", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-last-error"))
+                        .setBrowseName(context.qualifiedName("Last Error"))
+                        .setDisplayName(new LocalizedText("Last Error"))
+                        .setDataType(OpcUaDataType.fromBackingClass(String.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant("")))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-last-error", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-error-count"))
+                        .setBrowseName(context.qualifiedName("Error Count"))
+                        .setDisplayName(new LocalizedText("Error Count"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(0)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-error-count", node);
+
+        node = UaVariableNode.build(getNodeContext(), b ->
+                b.setNodeId(context.nodeId("diagnostics-disconnect-count"))
+                        .setBrowseName(context.qualifiedName("Disconnect Count"))
+                        .setDisplayName(new LocalizedText("Disconnect Count"))
+                        .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
+                        .setTypeDefinition(NodeIds.BaseDataVariableType)
+                        .setAccessLevel(AccessLevel.READ_ONLY)
+                        .setUserAccessLevel(AccessLevel.READ_ONLY)
+                        .setValue(new DataValue(new Variant(0)))
+                        .build()
+        );
+        getNodeManager().addNode(node);
+        diagnosticsFolder.addOrganizes(node);
+        nodeList.put("diagnostics-disconnect-count", node);
     }
 
     // ---- NativeApiConnectionListener implementation ----
@@ -271,9 +424,11 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
     public void onDisconnected(String reason) {
         logger.info("Native API disconnected: {}", reason);
         connectionStatus = "Disconnected";
+        disconnectCount++;
         nodeList.get("diagnostics-connected").setValue(new DataValue(new Variant(false)));
         nodeList.get("diagnostics-status").setValue(new DataValue(new Variant("Disconnected")));
         nodeList.get("diagnostics-state").setValue(new DataValue(new Variant("Disconnected")));
+        nodeList.get("diagnostics-disconnect-count").setValue(new DataValue(new Variant(disconnectCount)));
     }
 
     @Override
@@ -282,6 +437,7 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
         keyToEntityId.put(entity.key(), entity.entityId());
         keyToDomain.put(entity.key(), entity.domain());
         entityIdToKey.put(entity.entityId(), entity.key());
+        nodeList.get("diagnostics-entity-count").setValue(new DataValue(new Variant(keyToEntityId.size())));
 
         // Create the entity folder structure with initial values from metadata
         try {
@@ -340,11 +496,24 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
     }
 
     @Override
+    public void onMessageStats(long receivedCount, int lastReceivedSize, long sentCount, long receivedBytes, long sentBytes) {
+        nodeList.get("diagnostics-received-messages").setValue(new DataValue(new Variant(receivedCount)));
+        nodeList.get("diagnostics-last-message-size").setValue(new DataValue(new Variant(lastReceivedSize)));
+        nodeList.get("diagnostics-sent-messages").setValue(new DataValue(new Variant(sentCount)));
+        nodeList.get("diagnostics-received-bytes").setValue(new DataValue(new Variant(receivedBytes)));
+        nodeList.get("diagnostics-sent-bytes").setValue(new DataValue(new Variant(sentBytes)));
+    }
+
+    @Override
     public void onError(String message, Throwable cause) {
         logger.error("Native API error: {}", message, cause);
         connectionStatus = "Error: " + message;
+        errorCount++;
+        lastError = message;
         nodeList.get("diagnostics-status").setValue(new DataValue(new Variant(connectionStatus)));
         nodeList.get("diagnostics-state").setValue(new DataValue(new Variant(connectionStatus)));
+        nodeList.get("diagnostics-error-count").setValue(new DataValue(new Variant(errorCount)));
+        nodeList.get("diagnostics-last-error").setValue(new DataValue(new Variant(message)));
     }
 
     // ---- Node creation helpers (same pattern as ESPHomeDevice) ----
@@ -436,6 +605,30 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
             var node = nodeList.get(nodeKeyStr);
             if (node == null) {
                 results.add(new StatusCode(StatusCodes.Bad_NodeIdUnknown));
+                continue;
+            }
+
+            // Handle diagnostic reset counters tag
+            if ("diagnostics-reset-counters".equals(nodeKeyStr)) {
+                Object rawVal = wv.getValue().getValue().getValue();
+                boolean val = (rawVal instanceof Boolean) ? (Boolean) rawVal :
+                        Boolean.parseBoolean(rawVal.toString());
+                if (val) {
+                    connection.resetMessageStats();
+                    nodeList.get("diagnostics-received-messages").setValue(new DataValue(new Variant(0L)));
+                    nodeList.get("diagnostics-last-message-size").setValue(new DataValue(new Variant(0)));
+                    nodeList.get("diagnostics-sent-messages").setValue(new DataValue(new Variant(0L)));
+                    nodeList.get("diagnostics-received-bytes").setValue(new DataValue(new Variant(0L)));
+                    nodeList.get("diagnostics-sent-bytes").setValue(new DataValue(new Variant(0L)));
+                    disconnectCount = 0;
+                    errorCount = 0;
+                    lastError = "";
+                    nodeList.get("diagnostics-disconnect-count").setValue(new DataValue(new Variant(0)));
+                    nodeList.get("diagnostics-error-count").setValue(new DataValue(new Variant(0)));
+                    nodeList.get("diagnostics-last-error").setValue(new DataValue(new Variant("")));
+                    node.setValue(new DataValue(new Variant(false)));
+                }
+                results.add(StatusCode.GOOD);
                 continue;
             }
 

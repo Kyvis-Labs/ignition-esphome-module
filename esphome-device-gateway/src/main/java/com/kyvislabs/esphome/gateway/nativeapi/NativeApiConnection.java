@@ -20,6 +20,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class NativeApiConnection {
 
@@ -50,6 +52,12 @@ public class NativeApiConnection {
 
     // Maps native API key -> entity info for state correlation
     private final HashMap<Integer, EntityInfo> entityByKey = new HashMap<>();
+
+    private final AtomicLong receivedMessageCount = new AtomicLong(0);
+    private final AtomicInteger lastReceivedMessageSize = new AtomicInteger(0);
+    private final AtomicLong sentMessageCount = new AtomicLong(0);
+    private final AtomicLong receivedByteCount = new AtomicLong(0);
+    private final AtomicLong sentByteCount = new AtomicLong(0);
 
     public NativeApiConnection(String host, int port, NativeApiConnectionListener listener) {
         this.host = host;
@@ -130,6 +138,9 @@ public class NativeApiConnection {
     private RawMessage readExpectedMessage(int expectedType) throws IOException {
         while (true) {
             RawMessage msg = MessageFramer.readFrame(inputStream);
+            receivedMessageCount.incrementAndGet();
+            lastReceivedMessageSize.set(msg.payload().length);
+            receivedByteCount.addAndGet(frameSize(msg));
             int type = msg.messageType();
 
             if (type == expectedType) {
@@ -174,6 +185,8 @@ public class NativeApiConnection {
         synchronized (this) {
             outputStream.write(batch);
             outputStream.flush();
+            sentMessageCount.addAndGet(2);
+            sentByteCount.addAndGet(batch.length);
         }
 
         // Read HelloResponse
@@ -220,6 +233,11 @@ public class NativeApiConnection {
     }
 
     private void handleMessage(RawMessage msg) throws IOException {
+        long rxCount = receivedMessageCount.incrementAndGet();
+        lastReceivedMessageSize.set(msg.payload().length);
+        long rxBytes = receivedByteCount.addAndGet(frameSize(msg));
+        listener.onMessageStats(rxCount, msg.payload().length, sentMessageCount.get(), rxBytes, sentByteCount.get());
+
         int type = msg.messageType();
 
         switch (type) {
@@ -326,7 +344,12 @@ public class NativeApiConnection {
     private void sendMessage(int messageType, byte[] payload) throws IOException {
         synchronized (this) {
             if (outputStream != null) {
-                MessageFramer.writeFrame(outputStream, messageType, payload);
+                byte[] frame = MessageFramer.buildFrame(messageType, payload);
+                outputStream.write(frame);
+                outputStream.flush();
+                long txCount = sentMessageCount.incrementAndGet();
+                long txBytes = sentByteCount.addAndGet(frame.length);
+                listener.onMessageStats(receivedMessageCount.get(), lastReceivedMessageSize.get(), txCount, receivedByteCount.get(), txBytes);
             }
         }
     }
@@ -443,6 +466,14 @@ public class NativeApiConnection {
         sendMessage(MessageTypes.CLIMATE_COMMAND_REQUEST, writer.toByteArray());
     }
 
+    public void resetMessageStats() {
+        receivedMessageCount.set(0);
+        lastReceivedMessageSize.set(0);
+        sentMessageCount.set(0);
+        receivedByteCount.set(0);
+        sentByteCount.set(0);
+    }
+
     public void sendLockCommand(int key, int command) throws IOException {
         var writer = new ProtobufWriter();
         writer.writeFixed32Field(1, key);
@@ -498,6 +529,19 @@ public class NativeApiConnection {
         outputStream = null;
     }
 
+    private static int frameSize(RawMessage msg) {
+        return 1 + varintSize(msg.payload().length) + varintSize(msg.messageType()) + msg.payload().length;
+    }
+
+    private static int varintSize(int value) {
+        int size = 1;
+        while ((value & ~0x7F) != 0) {
+            size++;
+            value >>>= 7;
+        }
+        return size;
+    }
+
     private void scheduleReconnect() {
         if (shutdownRequested.get()) {
             return;
@@ -510,6 +554,11 @@ public class NativeApiConnection {
         }
         closeSocket();
         entityByKey.clear();
+        receivedMessageCount.set(0);
+        lastReceivedMessageSize.set(0);
+        sentMessageCount.set(0);
+        receivedByteCount.set(0);
+        sentByteCount.set(0);
 
         logger.info("Scheduling reconnect to {}:{} in {}ms", host, port, currentReconnectDelay);
 

@@ -15,4 +15,6 @@ public interface NativeApiConnectionListener {
     void onStateUpdate(int key, String domain, HashMap<String, Object> stateData);
 
     void onError(String message, Throwable cause);
+
+    void onMessageStats(long receivedCount, int lastReceivedSize, long sentCount, long receivedBytes, long sentBytes);
 }
