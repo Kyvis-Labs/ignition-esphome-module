@@ -370,3 +370,6 @@ docker-compose.yml
 ignition/
 
 .vscode
+
+# Maven flatten plugin
+.flattened-pom.xml
