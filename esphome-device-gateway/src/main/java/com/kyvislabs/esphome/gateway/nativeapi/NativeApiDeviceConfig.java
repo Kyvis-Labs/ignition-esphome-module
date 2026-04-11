@@ -6,6 +6,7 @@ import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.F
 import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.FormField;
 import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.Label;
 import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.Required;
+import com.inductiveautomation.ignition.gateway.secrets.SecretConfig;
 import com.inductiveautomation.ignition.gateway.web.nav.FormFieldType;
 
 public record NativeApiDeviceConfig(General general) {
@@ -25,6 +26,12 @@ public record NativeApiDeviceConfig(General general) {
             @DefaultValue("6053")
             @Required
             @Description("The Native API port of the ESPHome device.")
-            int port
+            int port,
+
+        @FormCategory("GENERAL")
+            @Label("Encryption Key")
+            @FormField(FormFieldType.SECRET)
+            @Description("Base64-encoded encryption key from the device's api: encryption: key: config. Leave empty for plaintext.")
+            SecretConfig encryptionKey
     ) {}
 }

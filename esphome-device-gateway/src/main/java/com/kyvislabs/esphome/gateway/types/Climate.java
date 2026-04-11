@@ -12,6 +12,10 @@ public class Climate extends Base {
     String action;
     String fanMode;
     String swingMode;
+    String supportedModes;
+    String supportedFanModes;
+    String supportedSwingModes;
+    String supportedPresets;
 
     public Climate(HashMap<String, Object> payload) {
         super(payload);
@@ -21,6 +25,10 @@ public class Climate extends Base {
         action = TypeUtilities.toString(payload.getOrDefault("action", null));
         fanMode = TypeUtilities.toString(payload.getOrDefault("fan_mode", null));
         swingMode = TypeUtilities.toString(payload.getOrDefault("swing_mode", null));
+        supportedModes = TypeUtilities.toString(payload.getOrDefault("supported_modes", null));
+        supportedFanModes = TypeUtilities.toString(payload.getOrDefault("supported_fan_modes", null));
+        supportedSwingModes = TypeUtilities.toString(payload.getOrDefault("supported_swing_modes", null));
+        supportedPresets = TypeUtilities.toString(payload.getOrDefault("supported_presets", null));
     }
 
     @Override
@@ -32,6 +40,10 @@ public class Climate extends Base {
         props.put("action", action != null ? action : "");
         props.put("fan_mode", fanMode != null ? fanMode : "");
         props.put("swing_mode", swingMode != null ? swingMode : "");
+        props.put("supported_modes", supportedModes != null ? supportedModes : "");
+        props.put("supported_fan_modes", supportedFanModes != null ? supportedFanModes : "");
+        props.put("supported_swing_modes", supportedSwingModes != null ? supportedSwingModes : "");
+        props.put("supported_presets", supportedPresets != null ? supportedPresets : "");
         return props;
     }
 
@@ -44,6 +56,10 @@ public class Climate extends Base {
                 ", action='" + action + '\'' +
                 ", fanMode='" + fanMode + '\'' +
                 ", swingMode='" + swingMode + '\'' +
+                ", supportedModes='" + supportedModes + '\'' +
+                ", supportedFanModes='" + supportedFanModes + '\'' +
+                ", supportedSwingModes='" + supportedSwingModes + '\'' +
+                ", supportedPresets='" + supportedPresets + '\'' +
                 ", id='" + id + '\'' +
                 ", name='" + name + '\'' +
                 ", icon='" + icon + '\'' +

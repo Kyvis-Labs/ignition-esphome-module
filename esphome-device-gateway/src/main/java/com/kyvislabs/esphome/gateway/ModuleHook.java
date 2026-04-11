@@ -17,7 +17,6 @@ public class ModuleHook extends AbstractDeviceModuleHook {
   public void setup(GatewayContext context) {
     super.setup(context);
 
-    BundleUtil.get().addBundle(ESPHomeDevice.class);
     BundleUtil.get().addBundle(NativeApiDevice.class);
   }
 
@@ -30,13 +29,12 @@ public class ModuleHook extends AbstractDeviceModuleHook {
   public void shutdown() {
     super.shutdown();
 
-    BundleUtil.get().removeBundle(ESPHomeDevice.class);
     BundleUtil.get().removeBundle(NativeApiDevice.class);
   }
 
   @Override
   protected List<DeviceExtensionPoint<?>> getDeviceExtensionPoints() {
-    return List.of(new ESPHomeDeviceExtensionPoint(), new NativeApiDeviceExtensionPoint());
+    return List.of(new NativeApiDeviceExtensionPoint());
   }
 
   @Override
@@ -45,13 +43,13 @@ public class ModuleHook extends AbstractDeviceModuleHook {
     return List.of();
   }
 
-    @Override
-    public boolean isMakerEditionCompatible() {
-        return true;
-    }
+  @Override
+  public boolean isMakerEditionCompatible() {
+    return true;
+  }
 
-    @Override
-    public boolean isFreeModule() {
-        return true;
-    }
+  @Override
+  public boolean isFreeModule() {
+    return true;
+  }
 }

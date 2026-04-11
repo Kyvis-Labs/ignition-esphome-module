@@ -18,8 +18,8 @@ public class MessageFramer {
         if (preamble == 0x01) {
             throw new IOException(
                 "Device is using Noise encrypted API protocol (indicator 0x01). " +
-                "Remove the 'encryption:' block from the device's 'api:' configuration " +
-                "and reflash, or use the SSE device type instead.");
+                "Configure the encryption key in the device settings, or remove the " +
+                "'encryption:' block from the device's 'api:' configuration and reflash.");
         }
         if (preamble != 0x00) {
             throw new IOException(

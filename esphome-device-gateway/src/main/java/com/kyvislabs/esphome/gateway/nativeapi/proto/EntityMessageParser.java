@@ -92,6 +92,18 @@ public class EntityMessageParser {
         if (!options.isEmpty()) {
             result.put("options", String.join(", ", options));
         }
+        if (!supportedModes.isEmpty()) {
+            result.put("supported_modes", String.join(", ", supportedModes));
+        }
+        if (!supportedFanModes.isEmpty()) {
+            result.put("supported_fan_modes", String.join(", ", supportedFanModes));
+        }
+        if (!supportedSwingModes.isEmpty()) {
+            result.put("supported_swing_modes", String.join(", ", supportedSwingModes));
+        }
+        if (!supportedPresets.isEmpty()) {
+            result.put("supported_presets", String.join(", ", supportedPresets));
+        }
 
         return result;
     }

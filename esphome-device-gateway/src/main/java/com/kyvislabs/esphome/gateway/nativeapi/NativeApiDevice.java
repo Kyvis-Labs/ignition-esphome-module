@@ -2,6 +2,10 @@ package com.kyvislabs.esphome.gateway.nativeapi;
 
 import com.inductiveautomation.ignition.gateway.opcua.server.api.Device;
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
+import com.inductiveautomation.ignition.gateway.secrets.Plaintext;
+import com.inductiveautomation.ignition.gateway.secrets.Secret;
+import com.inductiveautomation.ignition.gateway.secrets.SecretConfig;
+import com.inductiveautomation.ignition.gateway.secrets.SecretException;
 import com.kyvislabs.esphome.gateway.types.*;
 import com.kyvislabs.esphome.gateway.types.Number;
 import org.eclipse.milo.opcua.sdk.core.AccessLevel;
@@ -24,7 +28,9 @@ import org.eclipse.milo.opcua.stack.core.types.structured.WriteValue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,31 +41,52 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
+    // Protocol enum ordinal maps (values match ESPHome Native API protobuf definitions)
+    private static final Map<String, Integer> CLIMATE_MODES = Map.of(
+            "OFF", 0, "HEAT_COOL", 1, "COOL", 2, "HEAT", 3,
+            "FAN_ONLY", 4, "DRY", 5, "AUTO", 6
+    );
+    private static final Map<String, Integer> CLIMATE_FAN_MODES = Map.of(
+            "ON", 0, "OFF", 1, "AUTO", 2, "LOW", 3, "MEDIUM", 4,
+            "HIGH", 5, "MIDDLE", 6, "FOCUS", 7, "DIFFUSE", 8, "QUIET", 9
+    );
+    private static final Map<String, Integer> CLIMATE_SWING_MODES = Map.of(
+            "OFF", 0, "BOTH", 1, "VERTICAL", 2, "HORIZONTAL", 3
+    );
+    private static final Map<String, Integer> FAN_DIRECTIONS = Map.of(
+            "FORWARD", 0, "REVERSE", 1
+    );
+    private static final Map<String, Integer> LOCK_COMMANDS = Map.ofEntries(
+            Map.entry("UNLOCK", 0), Map.entry("UNLOCKED", 0),
+            Map.entry("LOCK", 1), Map.entry("LOCKED", 1),
+            Map.entry("OPEN", 2)
+    );
+
     private final SubscriptionModel subscriptionModel;
     private final DeviceContext context;
     private final NativeApiDeviceConfig config;
 
     private NativeApiConnection connection;
-    String connectionStatus = "Not Connected";
-    int connectionCount = 0;
-    int disconnectCount = 0;
-    int errorCount = 0;
-    String lastError = "";
+    private volatile String connectionStatus = "Not Connected";
+    private volatile int connectionCount = 0;
+    private volatile int disconnectCount = 0;
+    private volatile int errorCount = 0;
+    private volatile String lastError = "";
 
-    ConcurrentHashMap<String, UaVariableNode> nodeList = new ConcurrentHashMap<>();
-    ConcurrentHashMap<String, UaFolderNode> domainFolders = new ConcurrentHashMap<>();
-    Set<String> entityFolders = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<String, UaVariableNode> nodeList = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, UaFolderNode> domainFolders = new ConcurrentHashMap<>();
+    private final Set<String> entityFolders = ConcurrentHashMap.newKeySet();
 
     // Maps native API key -> entity ID for state updates
-    ConcurrentHashMap<Integer, String> keyToEntityId = new ConcurrentHashMap<>();
-    ConcurrentHashMap<Integer, String> keyToDomain = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, String> keyToEntityId = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, String> keyToDomain = new ConcurrentHashMap<>();
 
     // Maps entity ID -> native API key (reverse lookup for write commands)
-    ConcurrentHashMap<String, Integer> entityIdToKey = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Integer> entityIdToKey = new ConcurrentHashMap<>();
 
-    UaFolderNode stateFolder;
-    UaFolderNode metaFolder;
-    UaFolderNode diagnosticsFolder;
+    private UaFolderNode stateFolder;
+    private UaFolderNode metaFolder;
+    private UaFolderNode diagnosticsFolder;
 
     public NativeApiDevice(DeviceContext context, NativeApiDeviceConfig config) {
         super(context.getServer());
@@ -130,7 +157,8 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
                         .getDataItems(context.getName())
         );
 
-        connection = new NativeApiConnection(config.general().host(), config.general().port(), this);
+        byte[] psk = resolveEncryptionKey();
+        connection = new NativeApiConnection(config.general().host(), config.general().port(), psk, this);
         connection.connect();
     }
 
@@ -148,231 +176,67 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
         }
     }
 
+    private byte[] resolveEncryptionKey() {
+        SecretConfig secretConfig = config.general().encryptionKey();
+        if (secretConfig == null) {
+            return null;
+        }
+
+        try {
+            Secret<?> secret = Secret.create(context.getGatewayContext(), secretConfig);
+            try (Plaintext plaintext = secret.getPlaintext()) {
+                String base64Key = plaintext.getAsString();
+                if (base64Key == null || base64Key.isEmpty()) {
+                    return null;
+                }
+                byte[] decoded = Base64.getDecoder().decode(base64Key);
+                if (decoded.length != 32) {
+                    throw new IllegalArgumentException(
+                        "Encryption key must decode to exactly 32 bytes (got " + decoded.length + ")");
+                }
+                return decoded;
+            }
+        } catch (SecretException e) {
+            throw new RuntimeException("Failed to resolve encryption key secret", e);
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Invalid encryption key: " + e.getMessage(), e);
+        }
+    }
+
     private void addDiagnosticTags() {
+        createDiagnosticNode("connected", "Connected", Boolean.class, AccessLevel.READ_ONLY, "Connected".equals(connectionStatus));
+        createDiagnosticNode("state", "State", String.class, AccessLevel.READ_ONLY, connectionStatus);
+        createDiagnosticNode("status", "Status", String.class, AccessLevel.READ_ONLY, connectionStatus);
+        createDiagnosticNode("host", "Host", String.class, AccessLevel.READ_ONLY, config.general().host() + ":" + config.general().port());
+        createDiagnosticNode("connection-count", "Connection Count", Integer.class, AccessLevel.READ_ONLY, connectionCount);
+        createDiagnosticNode("received-messages", "Received Messages", Long.class, AccessLevel.READ_ONLY, 0L);
+        createDiagnosticNode("last-message-size", "Last Message Size", Integer.class, AccessLevel.READ_ONLY, 0);
+        createDiagnosticNode("sent-messages", "Sent Messages", Long.class, AccessLevel.READ_ONLY, 0L);
+        createDiagnosticNode("received-bytes", "Received Bytes", Long.class, AccessLevel.READ_ONLY, 0L);
+        createDiagnosticNode("sent-bytes", "Sent Bytes", Long.class, AccessLevel.READ_ONLY, 0L);
+        createDiagnosticNode("reset-counters", "Reset Counters", Boolean.class, AccessLevel.READ_WRITE, false);
+        createDiagnosticNode("entity-count", "Entity Count", Integer.class, AccessLevel.READ_ONLY, 0);
+        createDiagnosticNode("last-error", "Last Error", String.class, AccessLevel.READ_ONLY, "");
+        createDiagnosticNode("error-count", "Error Count", Integer.class, AccessLevel.READ_ONLY, 0);
+        createDiagnosticNode("disconnect-count", "Disconnect Count", Integer.class, AccessLevel.READ_ONLY, 0);
+    }
+
+    private void createDiagnosticNode(String idSuffix, String displayName,
+            Class<?> dataType, Set<AccessLevel> accessLevel, Object initialValue) {
         var node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-connected"))
-                        .setBrowseName(context.qualifiedName("Connected"))
-                        .setDisplayName(new LocalizedText("Connected"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Boolean.class).getNodeId())
+                b.setNodeId(context.nodeId("diagnostics-" + idSuffix))
+                        .setBrowseName(context.qualifiedName(displayName))
+                        .setDisplayName(new LocalizedText(displayName))
+                        .setDataType(OpcUaDataType.fromBackingClass(dataType).getNodeId())
                         .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant("Connected".equals(connectionStatus))))
+                        .setAccessLevel(accessLevel)
+                        .setUserAccessLevel(accessLevel)
+                        .setValue(new DataValue(new Variant(initialValue)))
                         .build()
         );
         getNodeManager().addNode(node);
         diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-connected", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-state"))
-                        .setBrowseName(context.qualifiedName("State"))
-                        .setDisplayName(new LocalizedText("State"))
-                        .setDataType(OpcUaDataType.fromBackingClass(String.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(connectionStatus)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-state", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-status"))
-                        .setBrowseName(context.qualifiedName("Status"))
-                        .setDisplayName(new LocalizedText("Status"))
-                        .setDataType(OpcUaDataType.fromBackingClass(String.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(connectionStatus)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-status", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-host"))
-                        .setBrowseName(context.qualifiedName("Host"))
-                        .setDisplayName(new LocalizedText("Host"))
-                        .setDataType(OpcUaDataType.fromBackingClass(String.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(config.general().host() + ":" + config.general().port())))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-host", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-connection-count"))
-                        .setBrowseName(context.qualifiedName("Connection Count"))
-                        .setDisplayName(new LocalizedText("Connection Count"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(connectionCount)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-connection-count", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-received-messages"))
-                        .setBrowseName(context.qualifiedName("Received Messages"))
-                        .setDisplayName(new LocalizedText("Received Messages"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Long.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(0L)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-received-messages", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-last-message-size"))
-                        .setBrowseName(context.qualifiedName("Last Message Size"))
-                        .setDisplayName(new LocalizedText("Last Message Size"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(0)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-last-message-size", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-sent-messages"))
-                        .setBrowseName(context.qualifiedName("Sent Messages"))
-                        .setDisplayName(new LocalizedText("Sent Messages"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Long.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(0L)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-sent-messages", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-received-bytes"))
-                        .setBrowseName(context.qualifiedName("Received Bytes"))
-                        .setDisplayName(new LocalizedText("Received Bytes"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Long.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(0L)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-received-bytes", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-sent-bytes"))
-                        .setBrowseName(context.qualifiedName("Sent Bytes"))
-                        .setDisplayName(new LocalizedText("Sent Bytes"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Long.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(0L)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-sent-bytes", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-reset-counters"))
-                        .setBrowseName(context.qualifiedName("Reset Counters"))
-                        .setDisplayName(new LocalizedText("Reset Counters"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Boolean.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_WRITE)
-                        .setUserAccessLevel(AccessLevel.READ_WRITE)
-                        .setValue(new DataValue(new Variant(false)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-reset-counters", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-entity-count"))
-                        .setBrowseName(context.qualifiedName("Entity Count"))
-                        .setDisplayName(new LocalizedText("Entity Count"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(0)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-entity-count", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-last-error"))
-                        .setBrowseName(context.qualifiedName("Last Error"))
-                        .setDisplayName(new LocalizedText("Last Error"))
-                        .setDataType(OpcUaDataType.fromBackingClass(String.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant("")))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-last-error", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-error-count"))
-                        .setBrowseName(context.qualifiedName("Error Count"))
-                        .setDisplayName(new LocalizedText("Error Count"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(0)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-error-count", node);
-
-        node = UaVariableNode.build(getNodeContext(), b ->
-                b.setNodeId(context.nodeId("diagnostics-disconnect-count"))
-                        .setBrowseName(context.qualifiedName("Disconnect Count"))
-                        .setDisplayName(new LocalizedText("Disconnect Count"))
-                        .setDataType(OpcUaDataType.fromBackingClass(Integer.class).getNodeId())
-                        .setTypeDefinition(NodeIds.BaseDataVariableType)
-                        .setAccessLevel(AccessLevel.READ_ONLY)
-                        .setUserAccessLevel(AccessLevel.READ_ONLY)
-                        .setValue(new DataValue(new Variant(0)))
-                        .build()
-        );
-        getNodeManager().addNode(node);
-        diagnosticsFolder.addOrganizes(node);
-        nodeList.put("diagnostics-disconnect-count", node);
+        nodeList.put("diagnostics-" + idSuffix, node);
     }
 
     // ---- NativeApiConnectionListener implementation ----
@@ -516,7 +380,7 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
         nodeList.get("diagnostics-last-error").setValue(new DataValue(new Variant(message)));
     }
 
-    // ---- Node creation helpers (same pattern as ESPHomeDevice) ----
+    // ---- Node creation helpers ----
 
     private UaFolderNode getOrCreateDomainFolder(String domain) {
         return domainFolders.computeIfAbsent(domain, d -> {
@@ -611,9 +475,7 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
             // Handle diagnostic reset counters tag
             if ("diagnostics-reset-counters".equals(nodeKeyStr)) {
                 Object rawVal = wv.getValue().getValue().getValue();
-                boolean val = (rawVal instanceof Boolean) ? (Boolean) rawVal :
-                        Boolean.parseBoolean(rawVal.toString());
-                if (val) {
+                if (toBoolean(rawVal)) {
                     connection.resetMessageStats();
                     nodeList.get("diagnostics-received-messages").setValue(new DataValue(new Variant(0L)));
                     nodeList.get("diagnostics-last-message-size").setValue(new DataValue(new Variant(0)));
@@ -650,189 +512,19 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
 
             Object rawValue = wv.getValue().getValue().getValue();
             try {
-                switch (domain) {
-                    case "switch" -> {
-                        boolean state = (rawValue instanceof Boolean) ? (Boolean) rawValue :
-                                Boolean.parseBoolean(rawValue.toString());
-                        connection.sendSwitchCommand(nativeKey, state);
-                        node.setValue(new DataValue(new Variant(state)));
-                        results.add(StatusCode.GOOD);
-                    }
-                    case "button" -> {
-                        connection.sendButtonCommand(nativeKey);
-                        results.add(StatusCode.GOOD);
-                    }
-                    case "number" -> {
-                        float state;
-                        if (rawValue instanceof java.lang.Number) {
-                            state = ((java.lang.Number) rawValue).floatValue();
-                        } else {
-                            state = Float.parseFloat(rawValue.toString());
-                        }
-                        connection.sendNumberCommand(nativeKey, state);
-                        node.setValue(new DataValue(new Variant((double) state)));
-                        results.add(StatusCode.GOOD);
-                    }
-                    case "cover" -> {
-                        float val = (rawValue instanceof java.lang.Number)
-                                ? ((java.lang.Number) rawValue).floatValue()
-                                : Float.parseFloat(rawValue.toString());
-                        switch (propName) {
-                            case "position" -> connection.sendCoverCommand(nativeKey, val, null, false);
-                            case "tilt" -> connection.sendCoverCommand(nativeKey, null, val, false);
-                            default -> { results.add(new StatusCode(StatusCodes.Bad_NotWritable)); continue; }
-                        }
-                        node.setValue(new DataValue(new Variant((double) val)));
-                        results.add(StatusCode.GOOD);
-                    }
-                    case "fan" -> {
-                        switch (propName) {
-                            case "value" -> {
-                                boolean state = (rawValue instanceof Boolean) ? (Boolean) rawValue :
-                                        Boolean.parseBoolean(rawValue.toString());
-                                connection.sendFanCommand(nativeKey, state, null, null, null);
-                                node.setValue(new DataValue(new Variant(state)));
-                            }
-                            case "speed_level" -> {
-                                int val = (rawValue instanceof java.lang.Number)
-                                        ? ((java.lang.Number) rawValue).intValue()
-                                        : Integer.parseInt(rawValue.toString());
-                                connection.sendFanCommand(nativeKey, null, val, null, null);
-                                node.setValue(new DataValue(new Variant(val)));
-                            }
-                            case "oscillating" -> {
-                                boolean val = (rawValue instanceof Boolean) ? (Boolean) rawValue :
-                                        Boolean.parseBoolean(rawValue.toString());
-                                connection.sendFanCommand(nativeKey, null, null, val, null);
-                                node.setValue(new DataValue(new Variant(val)));
-                            }
-                            case "direction" -> {
-                                String dirStr = rawValue.toString();
-                                int dir = switch (dirStr) {
-                                    case "FORWARD" -> 0;
-                                    case "REVERSE" -> 1;
-                                    default -> throw new IllegalArgumentException("Unknown fan direction: " + dirStr);
-                                };
-                                connection.sendFanCommand(nativeKey, null, null, null, dir);
-                                node.setValue(new DataValue(new Variant(dirStr)));
-                            }
-                            default -> { results.add(new StatusCode(StatusCodes.Bad_NotWritable)); continue; }
-                        }
-                        results.add(StatusCode.GOOD);
-                    }
-                    case "light" -> {
-                        switch (propName) {
-                            case "state" -> {
-                                boolean val = (rawValue instanceof Boolean) ? (Boolean) rawValue :
-                                        Boolean.parseBoolean(rawValue.toString());
-                                connection.sendLightCommand(nativeKey, val, null, null, null, null, null);
-                                node.setValue(new DataValue(new Variant(val)));
-                            }
-                            case "brightness" -> {
-                                float val = (rawValue instanceof java.lang.Number)
-                                        ? ((java.lang.Number) rawValue).floatValue()
-                                        : Float.parseFloat(rawValue.toString());
-                                connection.sendLightCommand(nativeKey, null, val, null, null, null, null);
-                                node.setValue(new DataValue(new Variant((double) val)));
-                            }
-                            case "color" -> {
-                                String hexStr = rawValue.toString().trim();
-                                if (hexStr.startsWith("#")) {
-                                    hexStr = hexStr.substring(1);
-                                }
-                                float r = Integer.parseInt(hexStr.substring(0, 2), 16) / 255f;
-                                float g = Integer.parseInt(hexStr.substring(2, 4), 16) / 255f;
-                                float b = Integer.parseInt(hexStr.substring(4, 6), 16) / 255f;
-                                connection.sendLightCommand(nativeKey, null, null, r, g, b, null);
-                                node.setValue(new DataValue(new Variant("#" + hexStr.toUpperCase())));
-                            }
-                            case "effect" -> {
-                                String val = rawValue.toString();
-                                connection.sendLightCommand(nativeKey, null, null, null, null, null, val);
-                                node.setValue(new DataValue(new Variant(val)));
-                            }
-                            default -> { results.add(new StatusCode(StatusCodes.Bad_NotWritable)); continue; }
-                        }
-                        results.add(StatusCode.GOOD);
-                    }
-                    case "select" -> {
-                        String val = rawValue.toString();
-                        connection.sendSelectCommand(nativeKey, val);
-                        node.setValue(new DataValue(new Variant(val)));
-                        results.add(StatusCode.GOOD);
-                    }
-                    case "climate" -> {
-                        switch (propName) {
-                            case "mode" -> {
-                                String modeStr = rawValue.toString();
-                                int mode = switch (modeStr) {
-                                    case "OFF" -> 0;
-                                    case "HEAT_COOL" -> 1;
-                                    case "COOL" -> 2;
-                                    case "HEAT" -> 3;
-                                    case "FAN_ONLY" -> 4;
-                                    case "DRY" -> 5;
-                                    case "AUTO" -> 6;
-                                    default -> throw new IllegalArgumentException("Unknown climate mode: " + modeStr);
-                                };
-                                connection.sendClimateCommand(nativeKey, mode, null, null, null);
-                                node.setValue(new DataValue(new Variant(modeStr)));
-                            }
-                            case "target_temperature" -> {
-                                float val = (rawValue instanceof java.lang.Number)
-                                        ? ((java.lang.Number) rawValue).floatValue()
-                                        : Float.parseFloat(rawValue.toString());
-                                connection.sendClimateCommand(nativeKey, null, val, null, null);
-                                node.setValue(new DataValue(new Variant((double) val)));
-                            }
-                            case "fan_mode" -> {
-                                String fmStr = rawValue.toString();
-                                int fm = switch (fmStr) {
-                                    case "ON" -> 0;
-                                    case "OFF" -> 1;
-                                    case "AUTO" -> 2;
-                                    case "LOW" -> 3;
-                                    case "MEDIUM" -> 4;
-                                    case "HIGH" -> 5;
-                                    case "MIDDLE" -> 6;
-                                    case "FOCUS" -> 7;
-                                    case "DIFFUSE" -> 8;
-                                    case "QUIET" -> 9;
-                                    default -> throw new IllegalArgumentException("Unknown climate fan mode: " + fmStr);
-                                };
-                                connection.sendClimateCommand(nativeKey, null, null, fm, null);
-                                node.setValue(new DataValue(new Variant(fmStr)));
-                            }
-                            case "swing_mode" -> {
-                                String smStr = rawValue.toString();
-                                int sm = switch (smStr) {
-                                    case "OFF" -> 0;
-                                    case "BOTH" -> 1;
-                                    case "VERTICAL" -> 2;
-                                    case "HORIZONTAL" -> 3;
-                                    default -> throw new IllegalArgumentException("Unknown climate swing mode: " + smStr);
-                                };
-                                connection.sendClimateCommand(nativeKey, null, null, null, sm);
-                                node.setValue(new DataValue(new Variant(smStr)));
-                            }
-                            default -> { results.add(new StatusCode(StatusCodes.Bad_NotWritable)); continue; }
-                        }
-                        results.add(StatusCode.GOOD);
-                    }
-                    case "lock" -> {
-                        String lockStr = rawValue.toString();
-                        int cmd = switch (lockStr) {
-                            case "UNLOCK", "UNLOCKED" -> 0;
-                            case "LOCK", "LOCKED" -> 1;
-                            case "OPEN" -> 2;
-                            default -> throw new IllegalArgumentException("Unknown lock command: " + lockStr);
-                        };
-                        connection.sendLockCommand(nativeKey, cmd);
-                        node.setValue(new DataValue(new Variant(lockStr)));
-                        results.add(StatusCode.GOOD);
-                    }
-                    default -> results.add(new StatusCode(StatusCodes.Bad_NotWritable));
-                }
+                boolean handled = switch (domain) {
+                    case "switch" -> writeSwitch(nativeKey, node, rawValue);
+                    case "button" -> writeButton(nativeKey);
+                    case "number" -> writeNumber(nativeKey, node, rawValue);
+                    case "cover" -> writeCover(nativeKey, node, rawValue, propName);
+                    case "fan" -> writeFan(nativeKey, node, rawValue, propName);
+                    case "light" -> writeLight(nativeKey, node, rawValue, propName);
+                    case "select" -> writeSelect(nativeKey, node, rawValue);
+                    case "climate" -> writeClimate(nativeKey, node, rawValue, propName);
+                    case "lock" -> writeLock(nativeKey, node, rawValue);
+                    default -> false;
+                };
+                results.add(handled ? StatusCode.GOOD : new StatusCode(StatusCodes.Bad_NotWritable));
             } catch (Exception e) {
                 logger.error("Failed to write to entity {}: {}", entityId, e.getMessage(), e);
                 results.add(new StatusCode(StatusCodes.Bad_InternalError));
@@ -840,6 +532,161 @@ public class NativeApiDevice extends ManagedAddressSpaceWithLifecycle implements
         }
 
         return results;
+    }
+
+    private boolean writeSwitch(int key, UaVariableNode node, Object rawValue) throws IOException {
+        boolean state = toBoolean(rawValue);
+        connection.sendSwitchCommand(key, state);
+        node.setValue(new DataValue(new Variant(state)));
+        return true;
+    }
+
+    private boolean writeButton(int key) throws IOException {
+        connection.sendButtonCommand(key);
+        return true;
+    }
+
+    private boolean writeNumber(int key, UaVariableNode node, Object rawValue) throws IOException {
+        float state = toFloat(rawValue);
+        connection.sendNumberCommand(key, state);
+        node.setValue(new DataValue(new Variant((double) state)));
+        return true;
+    }
+
+    private boolean writeCover(int key, UaVariableNode node, Object rawValue, String propName) throws IOException {
+        float val = toFloat(rawValue);
+        switch (propName) {
+            case "position" -> connection.sendCoverCommand(key, val, null, false);
+            case "tilt" -> connection.sendCoverCommand(key, null, val, false);
+            default -> { return false; }
+        }
+        node.setValue(new DataValue(new Variant((double) val)));
+        return true;
+    }
+
+    private boolean writeFan(int key, UaVariableNode node, Object rawValue, String propName) throws IOException {
+        switch (propName) {
+            case "value" -> {
+                boolean state = toBoolean(rawValue);
+                connection.sendFanCommand(key, state, null, null, null);
+                node.setValue(new DataValue(new Variant(state)));
+            }
+            case "speed_level" -> {
+                int val = (rawValue instanceof java.lang.Number)
+                        ? ((java.lang.Number) rawValue).intValue()
+                        : Integer.parseInt(rawValue.toString());
+                connection.sendFanCommand(key, null, val, null, null);
+                node.setValue(new DataValue(new Variant(val)));
+            }
+            case "oscillating" -> {
+                boolean val = toBoolean(rawValue);
+                connection.sendFanCommand(key, null, null, val, null);
+                node.setValue(new DataValue(new Variant(val)));
+            }
+            case "direction" -> {
+                String dirStr = rawValue.toString();
+                int dir = lookupEnum(FAN_DIRECTIONS, dirStr, "fan direction");
+                connection.sendFanCommand(key, null, null, null, dir);
+                node.setValue(new DataValue(new Variant(dirStr)));
+            }
+            default -> { return false; }
+        }
+        return true;
+    }
+
+    private boolean writeLight(int key, UaVariableNode node, Object rawValue, String propName) throws IOException {
+        switch (propName) {
+            case "state" -> {
+                boolean val = toBoolean(rawValue);
+                connection.sendLightCommand(key, val, null, null, null, null, null);
+                node.setValue(new DataValue(new Variant(val)));
+            }
+            case "brightness" -> {
+                float val = toFloat(rawValue);
+                connection.sendLightCommand(key, null, val, null, null, null, null);
+                node.setValue(new DataValue(new Variant((double) val)));
+            }
+            case "color" -> {
+                String hexStr = rawValue.toString().trim();
+                if (hexStr.startsWith("#")) {
+                    hexStr = hexStr.substring(1);
+                }
+                float r = Integer.parseInt(hexStr.substring(0, 2), 16) / 255f;
+                float g = Integer.parseInt(hexStr.substring(2, 4), 16) / 255f;
+                float b = Integer.parseInt(hexStr.substring(4, 6), 16) / 255f;
+                connection.sendLightCommand(key, null, null, r, g, b, null);
+                node.setValue(new DataValue(new Variant("#" + hexStr.toUpperCase())));
+            }
+            case "effect" -> {
+                String val = rawValue.toString();
+                connection.sendLightCommand(key, null, null, null, null, null, val);
+                node.setValue(new DataValue(new Variant(val)));
+            }
+            default -> { return false; }
+        }
+        return true;
+    }
+
+    private boolean writeSelect(int key, UaVariableNode node, Object rawValue) throws IOException {
+        String val = rawValue.toString();
+        connection.sendSelectCommand(key, val);
+        node.setValue(new DataValue(new Variant(val)));
+        return true;
+    }
+
+    private boolean writeClimate(int key, UaVariableNode node, Object rawValue, String propName) throws IOException {
+        switch (propName) {
+            case "mode" -> {
+                String modeStr = rawValue.toString();
+                int mode = lookupEnum(CLIMATE_MODES, modeStr, "climate mode");
+                connection.sendClimateCommand(key, mode, null, null, null);
+                node.setValue(new DataValue(new Variant(modeStr)));
+            }
+            case "target_temperature" -> {
+                float val = toFloat(rawValue);
+                connection.sendClimateCommand(key, null, val, null, null);
+                node.setValue(new DataValue(new Variant((double) val)));
+            }
+            case "fan_mode" -> {
+                String fmStr = rawValue.toString();
+                int fm = lookupEnum(CLIMATE_FAN_MODES, fmStr, "climate fan mode");
+                connection.sendClimateCommand(key, null, null, fm, null);
+                node.setValue(new DataValue(new Variant(fmStr)));
+            }
+            case "swing_mode" -> {
+                String smStr = rawValue.toString();
+                int sm = lookupEnum(CLIMATE_SWING_MODES, smStr, "climate swing mode");
+                connection.sendClimateCommand(key, null, null, null, sm);
+                node.setValue(new DataValue(new Variant(smStr)));
+            }
+            default -> { return false; }
+        }
+        return true;
+    }
+
+    private boolean writeLock(int key, UaVariableNode node, Object rawValue) throws IOException {
+        String lockStr = rawValue.toString();
+        int cmd = lookupEnum(LOCK_COMMANDS, lockStr, "lock command");
+        connection.sendLockCommand(key, cmd);
+        node.setValue(new DataValue(new Variant(lockStr)));
+        return true;
+    }
+
+    private static boolean toBoolean(Object raw) {
+        return (raw instanceof Boolean) ? (Boolean) raw : Boolean.parseBoolean(raw.toString());
+    }
+
+    private static float toFloat(Object raw) {
+        return (raw instanceof java.lang.Number) ? ((java.lang.Number) raw).floatValue()
+                : Float.parseFloat(raw.toString());
+    }
+
+    private static int lookupEnum(Map<String, Integer> map, String value, String label) {
+        Integer ordinal = map.get(value);
+        if (ordinal == null) {
+            throw new IllegalArgumentException("Unknown " + label + ": " + value);
+        }
+        return ordinal;
     }
 
     // ---- Subscription model delegation ----

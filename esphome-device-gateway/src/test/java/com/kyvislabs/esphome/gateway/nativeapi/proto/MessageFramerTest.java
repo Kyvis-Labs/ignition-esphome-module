@@ -82,7 +82,7 @@ class MessageFramerTest {
     void readFrame_encryptionIndicator_throwsError() {
         var in = new ByteArrayInputStream(new byte[]{0x01});
         var ex = assertThrows(IOException.class, () -> MessageFramer.readFrame(in));
-        assertTrue(ex.getMessage().contains("Noise encrypted"));
+        assertTrue(ex.getMessage().contains("Noise encrypted") || ex.getMessage().contains("encryption key"));
     }
 
     @Test

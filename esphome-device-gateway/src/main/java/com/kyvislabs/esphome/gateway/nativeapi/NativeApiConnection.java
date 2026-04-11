@@ -1,5 +1,6 @@
 package com.kyvislabs.esphome.gateway.nativeapi;
 
+import com.kyvislabs.esphome.gateway.nativeapi.noise.NoiseFrameHelper;
 import com.kyvislabs.esphome.gateway.nativeapi.proto.EntityMessageParser;
 import com.kyvislabs.esphome.gateway.nativeapi.proto.MessageFramer;
 import com.kyvislabs.esphome.gateway.nativeapi.proto.MessageFramer.RawMessage;
@@ -14,7 +15,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.util.HashMap;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -33,16 +35,23 @@ public class NativeApiConnection {
     private static final long INITIAL_RECONNECT_DELAY_MS = 5_000;
     private static final long MAX_RECONNECT_DELAY_MS = 60_000;
 
+    private static final List<String> METADATA_FIELDS = List.of(
+            "icon", "uom", "min_value", "max_value", "step", "mode", "options", "assumed_state",
+            "supported_modes", "supported_fan_modes", "supported_swing_modes", "supported_presets"
+    );
+
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
     private final String host;
     private final int port;
+    private final byte[] psk;  // null for plaintext mode
     private final NativeApiConnectionListener listener;
     private final ScheduledExecutorService scheduler;
 
     private Socket socket;
     private InputStream inputStream;
     private OutputStream outputStream;
+    private NoiseFrameHelper noiseHelper;
     private Thread readerThread;
     private ScheduledFuture<?> keepaliveFuture;
 
@@ -51,7 +60,7 @@ public class NativeApiConnection {
     private long currentReconnectDelay = INITIAL_RECONNECT_DELAY_MS;
 
     // Maps native API key -> entity info for state correlation
-    private final HashMap<Integer, EntityInfo> entityByKey = new HashMap<>();
+    private final ConcurrentHashMap<Integer, EntityInfo> entityByKey = new ConcurrentHashMap<>();
 
     private final AtomicLong receivedMessageCount = new AtomicLong(0);
     private final AtomicInteger lastReceivedMessageSize = new AtomicInteger(0);
@@ -59,9 +68,10 @@ public class NativeApiConnection {
     private final AtomicLong receivedByteCount = new AtomicLong(0);
     private final AtomicLong sentByteCount = new AtomicLong(0);
 
-    public NativeApiConnection(String host, int port, NativeApiConnectionListener listener) {
+    public NativeApiConnection(String host, int port, byte[] psk, NativeApiConnectionListener listener) {
         this.host = host;
         this.port = port;
+        this.psk = psk;
         this.listener = listener;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "NativeApi-scheduler-" + host);
@@ -101,7 +111,14 @@ public class NativeApiConnection {
             inputStream = socket.getInputStream();
             outputStream = socket.getOutputStream();
 
-            // Perform hello handshake (also sends DeviceInfoRequest in same batch)
+            // If PSK is configured, perform Noise encryption handshake first
+            if (psk != null) {
+                noiseHelper = new NoiseFrameHelper(inputStream, outputStream, psk);
+                noiseHelper.performHandshake();
+                logger.info("Noise encryption handshake complete with {}:{}", host, port);
+            }
+
+            // Perform API hello handshake (also sends DeviceInfoRequest)
             performHandshake();
 
             // Handshake complete — switch to blocking reads for the reader thread
@@ -135,9 +152,16 @@ public class NativeApiConnection {
         }
     }
 
+    private RawMessage readFrame() throws IOException {
+        if (noiseHelper != null) {
+            return noiseHelper.readMessage();
+        }
+        return MessageFramer.readFrame(inputStream);
+    }
+
     private RawMessage readExpectedMessage(int expectedType) throws IOException {
         while (true) {
-            RawMessage msg = MessageFramer.readFrame(inputStream);
+            RawMessage msg = readFrame();
             receivedMessageCount.incrementAndGet();
             lastReceivedMessageSize.set(msg.payload().length);
             receivedByteCount.addAndGet(frameSize(msg));
@@ -167,26 +191,40 @@ public class NativeApiConnection {
     }
 
     private void performHandshake() throws IOException {
-        // Send HelloRequest + DeviceInfoRequest as a single TCP write.
-        // ESPHome 2026.1.0+ removed password auth, so ConnectRequest is skipped.
-        // Both frames must arrive in the same TCP segment for the device to process them.
         var writer = new ProtobufWriter();
         writer.writeStringField(1, CLIENT_INFO);
         writer.writeVarIntField(2, API_VERSION_MAJOR);
         writer.writeVarIntField(3, API_VERSION_MINOR);
         byte[] helloPayload = writer.toByteArray();
-        logger.info("Sending HelloRequest + DeviceInfoRequest to {}:{}", host, port);
+        logger.info("Sending HelloRequest + ConnectRequest + DeviceInfoRequest to {}:{}", host, port);
 
-        byte[] helloFrame = MessageFramer.buildFrame(MessageTypes.HELLO_REQUEST, helloPayload);
-        byte[] deviceInfoFrame = MessageFramer.buildFrame(MessageTypes.DEVICE_INFO_REQUEST, new byte[0]);
-        byte[] batch = new byte[helloFrame.length + deviceInfoFrame.length];
-        System.arraycopy(helloFrame, 0, batch, 0, helloFrame.length);
-        System.arraycopy(deviceInfoFrame, 0, batch, helloFrame.length, deviceInfoFrame.length);
-        synchronized (this) {
-            outputStream.write(batch);
-            outputStream.flush();
-            sentMessageCount.addAndGet(2);
-            sentByteCount.addAndGet(batch.length);
+        if (noiseHelper != null) {
+            // Encrypted: send as individual encrypted messages
+            synchronized (this) {
+                noiseHelper.writeMessage(MessageTypes.HELLO_REQUEST, helloPayload);
+                noiseHelper.writeMessage(MessageTypes.CONNECT_REQUEST, new byte[0]);
+                noiseHelper.writeMessage(MessageTypes.DEVICE_INFO_REQUEST, new byte[0]);
+                sentMessageCount.addAndGet(3);
+                sentByteCount.addAndGet(
+                    noiseHelper.frameSize(MessageTypes.HELLO_REQUEST, helloPayload) +
+                    noiseHelper.frameSize(MessageTypes.CONNECT_REQUEST, new byte[0]) +
+                    noiseHelper.frameSize(MessageTypes.DEVICE_INFO_REQUEST, new byte[0]));
+            }
+        } else {
+            // Plaintext: batch all frames in a single TCP write
+            byte[] helloFrame = MessageFramer.buildFrame(MessageTypes.HELLO_REQUEST, helloPayload);
+            byte[] connectFrame = MessageFramer.buildFrame(MessageTypes.CONNECT_REQUEST, new byte[0]);
+            byte[] deviceInfoFrame = MessageFramer.buildFrame(MessageTypes.DEVICE_INFO_REQUEST, new byte[0]);
+            byte[] batch = new byte[helloFrame.length + connectFrame.length + deviceInfoFrame.length];
+            System.arraycopy(helloFrame, 0, batch, 0, helloFrame.length);
+            System.arraycopy(connectFrame, 0, batch, helloFrame.length, connectFrame.length);
+            System.arraycopy(deviceInfoFrame, 0, batch, helloFrame.length + connectFrame.length, deviceInfoFrame.length);
+            synchronized (this) {
+                outputStream.write(batch);
+                outputStream.flush();
+                sentMessageCount.addAndGet(3);
+                sentByteCount.addAndGet(batch.length);
+            }
         }
 
         // Read HelloResponse
@@ -212,7 +250,7 @@ public class NativeApiConnection {
     private void readerLoop() {
         try {
             while (connected.get() && !shutdownRequested.get()) {
-                RawMessage msg = MessageFramer.readFrame(inputStream);
+                RawMessage msg = readFrame();
                 handleMessage(msg);
             }
         } catch (IOException e) {
@@ -243,6 +281,7 @@ public class NativeApiConnection {
         switch (type) {
             case MessageTypes.PING_REQUEST -> sendMessage(MessageTypes.PING_RESPONSE, new byte[0]);
             case MessageTypes.PING_RESPONSE -> { /* keepalive ack */ }
+            case MessageTypes.CONNECT_RESPONSE -> { /* authentication ack */ }
             case MessageTypes.DISCONNECT_REQUEST -> {
                 sendMessage(MessageTypes.DISCONNECT_RESPONSE, new byte[0]);
                 connected.set(false);
@@ -309,29 +348,10 @@ public class NativeApiConnection {
         if (info != null) {
             // Carry over static metadata fields to the state update
             var metadata = info.metadata();
-            if (metadata.containsKey("icon")) {
-                parsed.putIfAbsent("icon", metadata.get("icon"));
-            }
-            if (metadata.containsKey("uom")) {
-                parsed.putIfAbsent("uom", metadata.get("uom"));
-            }
-            if (metadata.containsKey("min_value")) {
-                parsed.putIfAbsent("min_value", metadata.get("min_value"));
-            }
-            if (metadata.containsKey("max_value")) {
-                parsed.putIfAbsent("max_value", metadata.get("max_value"));
-            }
-            if (metadata.containsKey("step")) {
-                parsed.putIfAbsent("step", metadata.get("step"));
-            }
-            if (metadata.containsKey("mode")) {
-                parsed.putIfAbsent("mode", metadata.get("mode"));
-            }
-            if (metadata.containsKey("options")) {
-                parsed.putIfAbsent("options", metadata.get("options"));
-            }
-            if (metadata.containsKey("assumed_state")) {
-                parsed.putIfAbsent("assumed_state", metadata.get("assumed_state"));
+            for (String field : METADATA_FIELDS) {
+                if (metadata.containsKey(field)) {
+                    parsed.putIfAbsent(field, metadata.get(field));
+                }
             }
             // Carry over id and name from discovery
             parsed.put("id", info.entityId());
@@ -344,11 +364,17 @@ public class NativeApiConnection {
     private void sendMessage(int messageType, byte[] payload) throws IOException {
         synchronized (this) {
             if (outputStream != null) {
-                byte[] frame = MessageFramer.buildFrame(messageType, payload);
-                outputStream.write(frame);
-                outputStream.flush();
+                long txBytes;
+                if (noiseHelper != null) {
+                    noiseHelper.writeMessage(messageType, payload);
+                    txBytes = sentByteCount.addAndGet(noiseHelper.frameSize(messageType, payload));
+                } else {
+                    byte[] frame = MessageFramer.buildFrame(messageType, payload);
+                    outputStream.write(frame);
+                    outputStream.flush();
+                    txBytes = sentByteCount.addAndGet(frame.length);
+                }
                 long txCount = sentMessageCount.incrementAndGet();
-                long txBytes = sentByteCount.addAndGet(frame.length);
                 listener.onMessageStats(receivedMessageCount.get(), lastReceivedMessageSize.get(), txCount, receivedByteCount.get(), txBytes);
             }
         }
@@ -527,9 +553,13 @@ public class NativeApiConnection {
         socket = null;
         inputStream = null;
         outputStream = null;
+        noiseHelper = null;
     }
 
-    private static int frameSize(RawMessage msg) {
+    private int frameSize(RawMessage msg) {
+        if (noiseHelper != null) {
+            return noiseHelper.frameSize(msg.messageType(), msg.payload());
+        }
         return 1 + varintSize(msg.payload().length) + varintSize(msg.messageType()) + msg.payload().length;
     }
 
